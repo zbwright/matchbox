@@ -20,6 +20,8 @@ systemd:
           contents: |
             [Service]
             EnvironmentFile=-/etc/flannel/options.env
+            Environment=FLANNEL_IMG=http://matchbox.foo:8080/assets/coreos-flannel
+            Environment=FLANNEL_VER=v0.6.2-amd64.aci
             ExecStartPre=/opt/init-flannel
     - name: docker.service
       dropins:
@@ -30,6 +32,17 @@ systemd:
             After=flanneld.service
             [Service]
             EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env
+    {{ if index . "insecure_registry" }}
+    - name: docker.service
+      enable: true
+      dropins:
+        - name: 40-insecure-registry.conf
+          contents: |
+            [Service]
+            Environment=INSECURE_REGISTRY='--insecure-registry={{.docker_registry}}'
+            ExecStart=
+            ExecStart=/usr/lib/coreos/dockerd daemon --host=fd:// $DOCKER_OPTS $DOCKER_CGROUPS $DOCKER_OPT_BIP $DOCKER_OPT_MTU $DOCKER_OPT_IPMASQ $INSECURE_REGISTRY
+    {{ end }} 
     - name: locksmithd.service
       dropins:
         - name: 40-etcd-lock.conf
@@ -65,6 +78,15 @@ systemd:
         After=k8s-assets.target
         [Service]
         Environment=KUBELET_VERSION=v1.5.1_coreos.0
+        {{ if index . "docker_registry" -}}
+        Environment=KUBELET_VERSION=v1.5.1_coreos.0.aci
+        Environment=KUBELET_ACI=http://matchbox.foo:8080/assets/coreos-hyperkube
+        Environment="RKT_OPTS=--volume dns,kind=host,source=/etc/resolv.conf \
+          --mount volume=dns,target=/etc/resolv.conf \
+          --volume var-log,kind=host,source=/var/log \
+          --mount volume=var-log,target=/var/log \
+          --insecure-options=image"
+        {{ else -}}
         Environment="RKT_OPTS=--uuid-file-save=/var/run/kubelet-pod.uuid \
           --volume dns,kind=host,source=/etc/resolv.conf \
           --mount volume=dns,target=/etc/resolv.conf \
@@ -78,6 +100,7 @@ systemd:
           {{ end -}}
           --volume var-log,kind=host,source=/var/log \
           --mount volume=var-log,target=/var/log"
+        {{ end -}}
         ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
         ExecStartPre=/usr/bin/mkdir -p /var/log/containers
         ExecStartPre=/usr/bin/systemctl is-active flanneld.service
@@ -94,6 +117,9 @@ systemd:
           --pod-manifest-path=/etc/kubernetes/manifests \
           --hostname-override={{.domain_name}} \
           --cluster_dns={{.k8s_dns_service_ip}} \
+          {{ if index . "docker_registry" -}}
+          --pod-infra-container-image={{.docker_registry}}/pause-amd64:3.0 \
+          {{ end -}}
           --cluster_domain=cluster.local
         ExecStop=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
         Restart=always
@@ -194,7 +220,11 @@ storage:
             hostNetwork: true
             containers:
             - name: kube-proxy
+              {{ if index . "docker_registry" -}}
+              image: {{.docker_registry}}/hyperkube:v1.5.1_coreos.0
+              {{ else -}}
               image: quay.io/coreos/hyperkube:v1.5.1_coreos.0
+              {{ end -}}
               command:
               - /hyperkube
               - proxy
@@ -228,7 +258,11 @@ storage:
             hostNetwork: true
             containers:
             - name: kube-apiserver
+              {{ if index . "docker_registry" -}}
+              image: {{.docker_registry}}/hyperkube:v1.5.1_coreos.0
+              {{ else -}}
               image: quay.io/coreos/hyperkube:v1.5.1_coreos.0
+              {{ end -}}
               command:
               - /hyperkube
               - apiserver
@@ -289,7 +323,11 @@ storage:
           spec:
             containers:
             - name: kube-controller-manager
+              {{ if index . "docker_registry" -}}
+              image: {{.docker_registry}}/hyperkube:v1.5.1_coreos.0
+              {{ else -}}
               image: quay.io/coreos/hyperkube:v1.5.1_coreos.0
+              {{ end -}}
               command:
               - /hyperkube
               - controller-manager
@@ -335,7 +373,11 @@ storage:
             hostNetwork: true
             containers:
             - name: kube-scheduler
+              {{ if index . "docker_registry" -}}
+              image: {{.docker_registry}}/hyperkube:v1.5.1_coreos.0
+              {{ else -}}
               image: quay.io/coreos/hyperkube:v1.5.1_coreos.0
+              {{ end -}}
               command:
               - /hyperkube
               - scheduler
@@ -374,7 +416,11 @@ storage:
               spec:
                 containers:
                 - name: autoscaler
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/cluster-proportional-autoscaler-amd64:1.0.0
+                  {{ else -}}
                   image: gcr.io/google_containers/cluster-proportional-autoscaler-amd64:1.0.0
+                  {{ end -}}
                   resources:
                       requests:
                           cpu: "20m"
@@ -418,7 +464,11 @@ storage:
               spec:
                 containers:
                 - name: kubedns
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/kubedns-amd64:1.9
+                  {{ else -}}
                   image: gcr.io/google_containers/kubedns-amd64:1.9
+                  {{ end -}} 
                   resources:
                     limits:
                       memory: 170Mi
@@ -460,7 +510,11 @@ storage:
                     name: metrics
                     protocol: TCP
                 - name: dnsmasq
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/kube-dnsmasq-amd64:1.4
+                  {{ else -}}
                   image: gcr.io/google_containers/kube-dnsmasq-amd64:1.4
+                  {{ end -}}
                   livenessProbe:
                     httpGet:
                       path: /healthz-dnsmasq
@@ -487,7 +541,11 @@ storage:
                       cpu: 150m
                       memory: 10Mi
                 - name: dnsmasq-metrics
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/dnsmasq-metrics-amd64:1.0
+                  {{ else -}}
                   image: gcr.io/google_containers/dnsmasq-metrics-amd64:1.0
+                  {{ end -}}
                   livenessProbe:
                     httpGet:
                       path: /metrics
@@ -508,7 +566,11 @@ storage:
                     requests:
                       memory: 10Mi
                 - name: healthz
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/exechealthz-amd64:1.2
+                  {{ else -}}
                   image: gcr.io/google_containers/exechealthz-amd64:1.2
+                  {{ end -}}
                   resources:
                     limits:
                       memory: 50Mi
@@ -579,8 +641,12 @@ storage:
                   scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
               spec:
                 containers:
-                  - image: gcr.io/google_containers/heapster:v1.2.0
-                    name: heapster
+                  - name: heapster
+                    {{ if index . "docker_registry" -}}
+                    image: {{.docker_registry}}/heapster:v1.2.0
+                    {{ else -}}
+                    image: gcr.io/google_containers/heapster:v1.2.0
+                    {{ end -}} 
                     livenessProbe:
                       httpGet:
                         path: /healthz
@@ -591,8 +657,12 @@ storage:
                     command:
                       - /heapster
                       - --source=kubernetes.summary_api:''
-                  - image: gcr.io/google_containers/addon-resizer:1.6
-                    name: heapster-nanny
+                  - name: heapster-nanny
+                    {{ if index . "docker_registry" -}}
+                    image: {{.docker_registry}}/addon-resizer:1.6
+                    {{ else -}} 
+                    image: gcr.io/google_containers/addon-resizer:1.6
+                    {{ end -}}
                     resources:
                       limits:
                         cpu: 50m
@@ -664,7 +734,11 @@ storage:
               spec:
                 containers:
                 - name: kubernetes-dashboard
+                  {{ if index . "docker_registry" -}}
+                  image: {{.docker_registry}}/kubernetes-dashboard-amd64:v1.5.0
+                  {{ else -}}
                   image: gcr.io/google_containers/kubernetes-dashboard-amd64:v1.5.0
+                  {{ end -}}
                   resources:
                     # keep request = limit to keep this container in guaranteed class
                     limits:
@@ -694,11 +768,13 @@ storage:
               k8s-app: kubernetes-dashboard
               kubernetes.io/cluster-service: "true"
           spec:
+            type: NodePort
             selector:
               k8s-app: kubernetes-dashboard
             ports:
             - port: 80
               targetPort: 9090
+              nodePort: 30000
     - path: /opt/init-flannel
       filesystem: root
       mode: 0544
